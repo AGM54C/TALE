@@ -178,29 +178,81 @@ def prepare_eval_data(data_path):
 
 def prepare_sft_train_data():
     """
-    Prepare data for supervised fine-tuning.
-    
+    Prepare data for Supervised Fine-Tuning (SFT).
+
     Returns:
         Dataset: HuggingFace Dataset object containing formatted training examples
-        
+
     Formats each example as:
     {
-        "input_text": question,
-        "target_text": prediction_budget
+        "question": input question,
+        "answer": target answer
     }
+
+    Supports multiple input formats:
+    - {"question": ..., "answer": ...}  # 原始格式
+    - {"prompt": ..., "completion": ...}  # BanFakeNews 格式
     """
     data = read_jsonl(args.train_data_path)
-    cleaned_data = [{
-        "question": item['question'],
-        "prediction": item['prediction_budget']  
-    } for item in data]
+
+    # 检测数据格式并统一转换
+    cleaned_data = []
+    for item in data:
+        if 'question' in item and 'answer' in item:
+            # 原始格式
+            cleaned_data.append({
+                "question": item['question'],
+                "answer": item['answer']
+            })
+        elif 'prompt' in item and 'completion' in item:
+            # BanFakeNews 格式
+            cleaned_data.append({
+                "question": item['prompt'],
+                "answer": item['completion']
+            })
+        else:
+            # 未知格式，记录警告
+            logger.warning(f"Unknown data format, skipping item: {list(item.keys())}")
+            continue
+
+    logger.info(f"Loaded {len(cleaned_data)} training samples")
 
     def format_example(example):
-        return {"input_text": f"{example['question']}",
-                "target_text": f"{example['prediction']}"}
+        return {
+            "question": f"{example['question']}",
+            "answer": f"{example['answer']}"
+        }
 
     train_dataset = Dataset.from_list([format_example(d) for d in cleaned_data])
     return train_dataset
+
+
+def preprocess_function(examples, tokenizer):
+    """
+    Preprocess function for tokenizing training data.
+
+    Args:
+        examples: Batch of examples from the dataset
+        tokenizer: Tokenizer to use for encoding
+
+    Returns:
+        dict: Tokenized inputs and labels
+    """
+    # 拼接问题和答案
+    texts = [q + a for q, a in zip(examples["question"], examples["answer"])]
+
+    # Tokenize
+    model_inputs = tokenizer(
+        texts,
+        max_length=args.max_new_tokens,
+        truncation=True,
+        padding="max_length"
+    )
+
+    # 设置 labels（用于计算 loss）
+    model_inputs["labels"] = model_inputs["input_ids"].copy()
+
+    return model_inputs
 
 
 def prepare_dpo_train_data():

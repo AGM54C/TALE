@@ -215,6 +215,7 @@ def prepare_sft_train_data():
             logger.warning(f"Unknown data format, skipping item: {list(item.keys())}")
             continue
 
+
     logger.info(f"Loaded {len(cleaned_data)} training samples")
 
     def format_example(example):

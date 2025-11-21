@@ -31,15 +31,15 @@ logger = logging.getLogger(__name__)
 class LoggingCallback(TrainerCallback):
     """
     Custom callback for logging training history to JSONL files.
-    
+
     This callback saves the training history to a specified JSONL file
     whenever logging occurs during training.
     """
-    
+
     def __init__(self, log_file):
         """
         Initialize the callback with a log file path.
-        
+
         Args:
             log_file: Path to save the training logs
         """
@@ -48,7 +48,7 @@ class LoggingCallback(TrainerCallback):
     def on_log(self, local_args, state: TrainerState, control: TrainerControl, **kwargs):
         """
         Save training history when logging occurs.
-        
+
         Args:
             local_args: Local arguments passed to the callback
             state: Current trainer state
@@ -95,13 +95,13 @@ def parse_args():
 def inference_eval(sample_list, base_model_path, lora_path, batch_size):
     """
     Run inference evaluation using vLLM with a fine-tuned model.
-    
+
     Args:
         sample_list: List of input samples to evaluate
         base_model_path: Path to the base model
         lora_path: Path to LoRA weights
         batch_size: Batch size for inference
-        
+
     Returns:
         list: List of model predictions for each input sample
     """
@@ -110,22 +110,22 @@ def inference_eval(sample_list, base_model_path, lora_path, batch_size):
     model = AutoModelForCausalLM.from_pretrained(
         base_model_path,
         torch_dtype=torch.float16,
-        device_map="cpu"  
+        device_map="cpu"
     )
     logger.info("Loading LoRA Weights...")
     model = PeftModel.from_pretrained(model, lora_path)
     logger.info("Merging LoRA with Base Model...")
     model = model.merge_and_unload()
 
-    merged_model_path = './.cache/merged_model'  
+    merged_model_path = './.cache/merged_model'
     model.save_pretrained(merged_model_path)
 
     llm = LLM(
         model=merged_model_path,
         tokenizer=base_model_path,
-        gpu_memory_utilization=0.95,  # ✅ 使用 90% 显存
-        max_model_len=16384,  # ✅ 降低序列长度
-        enforce_eager=True,  # ✅ 禁用 CUDA graph 节省显存
+        gpu_memory_utilization=0.95,  # 从 0.25 提升到 0.90
+        max_model_len=16384,  # 平衡版：支持长文本且显存友好
+        enforce_eager=True,  # 禁用 CUDA graph 以节省显存
     )
     tokenizer = AutoTokenizer.from_pretrained(base_model_path, local_files_only=True)
 
@@ -160,10 +160,10 @@ def inference_eval(sample_list, base_model_path, lora_path, batch_size):
 def prepare_eval_data(data_path):
     """
     Prepare evaluation data from JSONL file.
-    
+
     Args:
         data_path: Path to the JSONL data file
-        
+
     Returns:
         tuple: (sample_list, gt_list) where:
             sample_list: List of questions
@@ -216,7 +216,6 @@ def prepare_sft_train_data():
             logger.warning(f"Unknown data format, skipping item: {list(item.keys())}")
             continue
 
-
     logger.info(f"Loaded {len(cleaned_data)} training samples")
 
     def format_example(example):
@@ -251,7 +250,6 @@ def preprocess_function(examples, tokenizer):
         padding="max_length"
     )
 
-
     # 设置 labels（用于计算 loss）
     model_inputs["labels"] = model_inputs["input_ids"].copy()
 
@@ -261,10 +259,10 @@ def preprocess_function(examples, tokenizer):
 def prepare_dpo_train_data():
     """
     Prepare data for Direct Preference Optimization (DPO) training.
-    
+
     Returns:
         Dataset: HuggingFace Dataset object containing formatted training examples
-        
+
     Formats each example as:
     {
         "prompt": input prompt,
@@ -272,7 +270,7 @@ def prepare_dpo_train_data():
         "rejected": non-preferred response
     }
     """
-    data = read_jsonl(args.data_path)
+    data = read_jsonl(args.train_data_path)
     cleaned_data = [{
         "prompt": item['prompt'],
         "chosen": item['chosen'],
@@ -466,7 +464,7 @@ def load_model(model_path, lora_path):
 def train_model_with_lora(model, tokenizer, dataset):
     """
     Train model using LoRA fine-tuning.
-    
+
     Args:
         model: Base model to fine-tune
         tokenizer: Tokenizer for data processing
@@ -520,7 +518,7 @@ def train_model_with_lora(model, tokenizer, dataset):
 def train_model_with_dpo(model, tokenizer, dataset):
     """
     Train model using Direct Preference Optimization (DPO).
-    
+
     Args:
         model: Base model to fine-tune
         tokenizer: Tokenizer for data processing
@@ -551,7 +549,7 @@ def train_model_with_dpo(model, tokenizer, dataset):
         fp16=False,
         save_total_limit=200,
         weight_decay=0.001,
-        max_length=args.max_new_token,
+        max_length=args.max_new_tokens,
         seed=SEED,
         data_seed=SEED,
         logging_first_step=True,
@@ -574,7 +572,10 @@ def train_model_with_dpo(model, tokenizer, dataset):
         model.save_pretrained(args.output_dir)
         tokenizer.save_pretrained(args.output_dir)
 
+
 evaluator = AccEvaluator()
+
+
 def main():
     args.model_path = os.path.join('.cache', args.model_name)
     if args.eval:

@@ -123,8 +123,8 @@ def inference_eval(sample_list, base_model_path, lora_path, batch_size):
     llm = LLM(
         model=merged_model_path,
         tokenizer=base_model_path,
-        gpu_memory_utilization=0.90,  # ✅ 使用 90% 显存
-        max_model_len=4096,  # ✅ 降低序列长度
+        gpu_memory_utilization=0.95,  # ✅ 使用 90% 显存
+        max_model_len=16384,  # ✅ 降低序列长度
         enforce_eager=True,  # ✅ 禁用 CUDA graph 节省显存
     )
     tokenizer = AutoTokenizer.from_pretrained(base_model_path, local_files_only=True)

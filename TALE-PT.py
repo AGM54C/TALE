@@ -81,7 +81,15 @@ def parse_args():
     parser.add_argument("--epoch", default=2, type=int, help="=The training epochs.")
     parser.add_argument("--lr", default=1e-3, type=float, help="=The training learning detail.")
     parser.add_argument("--max_new_tokens", default=512, type=int, help="=The max new tokens for training.")
-    return parser.parse_args()
+
+    # 🆕 新增: 数据集名称参数
+    parser.add_argument("--data_name", default="GSM8K", type=str,
+                        help="Dataset name (GSM8K, BanFakeNews, etc.)")
+
+    # 🆕 新增: 学习率参数的别名
+    args = parser.parse_args()
+    args.learning_rate = args.lr  # 添加别名支持
+    return args
 
 
 def inference_eval(sample_list, base_model_path, lora_path, batch_size):
@@ -231,6 +239,7 @@ def evaluate():
     Returns:
         list: List of evaluation metrics
     """
+
     def AvgLength(sample_list, gt_list):
         logger.info(f"Data size: {len(sample_list)}")
         args.model = args.model_name
@@ -244,6 +253,11 @@ def evaluate():
         total_length = 0
         results = []
         start_time = time.time()
+
+        # 🆕 判断是否为分类任务
+        is_classification = 'BanFakeNews' in args.data_name if hasattr(args, 'data_name') else False
+        is_cloze = 'cloze' in args.data_name if hasattr(args, 'data_name') else True
+
         for i in range(len(pred_list)):
             results.append({
                 "ground truth": gt_list[i],
@@ -251,20 +265,26 @@ def evaluate():
                 "prediction": pred_list[i],
             })
             total_length += token_measure(pred_list[i])
-            if evaluator.evaluate_sample(results[-1], cloze=True):
+
+            # 🆕 根据任务类型选择评估方法
+            if evaluator.evaluate_sample(results[-1],
+                                         cloze=is_cloze,
+                                         classification=is_classification):
                 acc_num += 1
+
         logger.info("=" * 30 + 'Evaluation Results' + "=" * 30 + '\n')
         logger.info(f'Accuracy: {100 * (acc_num / len(results)):.2f}%')
-        logger.info(f"Token costs: {total_length / acc_num:.2f}")
+        if acc_num > 0:
+            logger.info(f"Token costs: {total_length / acc_num:.2f}")
         logger.info(f'Time cost: {time.time() - start_time}')
         return results
 
-    evaluator = AccEvaluator()
-    all_sample_list, all_gt_list = prepare_eval_data(args.test_data_path)
-    val_res = AvgLength(all_sample_list, all_gt_list)
-    logger.info("=" * 30 + 'END' + "=" * 30 + '\n')
-    logger.info(f"Saved to " + os.path.join(args.output_dir, f'internalize-{args.strategy}.jsonl'))
-    save_to_jsonl(val_res, os.path.join(args.output_dir, f'internalize-{args.strategy}.jsonl'))
+    # 从测试数据加载
+    test_data = read_jsonl(args.test_data_path)
+    sample_list = [item['question'] for item in test_data]
+    gt_list = [item['ground_truth'] for item in test_data]
+
+    return AvgLength(sample_list, gt_list)
 
 
 def tokenize_data(dataset, tokenizer):
@@ -435,7 +455,7 @@ def train_model_with_dpo(model, tokenizer, dataset):
         model.save_pretrained(args.output_dir)
         tokenizer.save_pretrained(args.output_dir)
 
-
+evaluator = AccEvaluator()
 def main():
     args.model_path = os.path.join('.cache', args.model_name)
     if args.eval:

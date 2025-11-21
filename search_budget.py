@@ -32,10 +32,11 @@ def parse_args():
     parser.add_argument("--key_index", default=0, type=int, help="The key index for the dataset.")
     parser.add_argument("--data_name", default=None,
                         type=str, help="The dataset name used during our evaluation.")
+    parser.add_argument("--reasoning", action='store_true', help="If we use LLM reasoning.")
     return parser.parse_args()
 
 
-def search_budget(instance, budget, model, evaluator, key='your_api_key'):
+def search_budget(instance, budget, model, evaluator, key='your_api_key', is_classification=False):
     """
     搜索在保持预测准确性的同时最小化token的最优token预算
 
@@ -54,13 +55,14 @@ def search_budget(instance, budget, model, evaluator, key='your_api_key'):
         model: LLM模型实例
         evaluator: AccEvaluator实例用于检查准确性
         key: 模型访问的API密钥（默认：'your_api_key'）
+        is_classification: 是否为分类任务（默认：False）
 
     Returns:
         tuple: (updated_instance, final_budget)
             updated_instance: 添加了预算信息的原始实例
             final_budget: 找到的最优预算
     """
-    pred_flag = evaluator.evaluate_sample(instance)
+    pred_flag = evaluator.evaluate_sample(instance, classification=is_classification)
     upper_bound = budget
     pre_token_cost = upper_bound
     instance['question_budget'] = 'None'
@@ -81,7 +83,7 @@ def search_budget(instance, budget, model, evaluator, key='your_api_key'):
         pred_flag = evaluator.evaluate_sample({
             'ground truth': instance['ground truth'],
             'prediction': cur_answer
-        })
+        }, classification=is_classification)
 
         # 下一次迭代的条件
         if pred_flag and cur_token_cost < pre_token_cost:
@@ -111,6 +113,7 @@ def main():
     """
     args = parse_args()
     args.do_search = True
+    args.reasoning = True  # 确保使用推理模式
     args.output_path = os.path.join(args.output_path, 'searched_budget.jsonl')
     logger.info(f'Saving to {args.output_path}')
 
@@ -127,6 +130,20 @@ def main():
     elif args.data_name == 'GSM8K':
         dataset = GSM8K(args, with_reasoning=args.reasoning, budget=args.budget,
                         name=args.data_name, cache=False)
+    elif args.data_name == 'GPQA':
+        dataset = GPQA(args, with_reasoning=args.reasoning, budget=args.budget,
+                       name=args.data_name, cache=False)
+    elif args.data_name in ['BanFakeNews', 'BanFakeNews-Train', 'BanFakeNews-Test']:
+        # 确定使用哪个子集
+        if args.data_name == 'BanFakeNews-Train':
+            subset_name = 'train'
+        elif args.data_name == 'BanFakeNews-Test':
+            subset_name = 'test'
+        else:
+            subset_name = 'all'
+
+        dataset = BanFakeNews(args, with_reasoning=args.reasoning, budget=args.budget,
+                              name=subset_name, cache=False)
     else:
         dataset = None
         ValueError(f"Not supported for {args.data_name}")
@@ -144,8 +161,13 @@ def main():
                     'sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa'],
         'moonshotai/Kimi-K2-Thinking-Turbo': ['sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa',
                                               'sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa'],
+        'moonshotai/Kimi-K2-Instruct-0905': ['sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa',
+                                             'sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa'],
     }
     key = keys[args.model][args.key_index]
+
+    # 判断是否为分类任务
+    is_classification = 'BanFakeNews' in args.data_name
 
     res_budget = []
     logger.info("=" * 30 + 'Searching' + "=" * 30 + '\n')
@@ -157,7 +179,7 @@ def main():
         for idx, instance in enumerate(dataset):
             if args.start_index <= idx < args.end_index:
                 logger.info('=' * 30 + f"Step: {idx + 1} / {len(dataset)}" + '=' * 30)
-                pred_flag = evaluator.evaluate_sample(instance)
+                pred_flag = evaluator.evaluate_sample(instance, classification=is_classification)
                 if not pred_flag:
                     # 跳过本来就答错的样本
                     continue
@@ -166,7 +188,8 @@ def main():
 
                 # 执行二分搜索找到最优预算
                 new_instance, budget = search_budget(instance, budget_upper_bound,
-                                                     model, evaluator, key=key)
+                                                     model, evaluator, key=key,
+                                                     is_classification=is_classification)
                 logger.info("Updating Budget: {}/{}.".format(budget, budget_upper_bound))
                 logger.info("Updating Token costs: {}/{}."
                             .format(token_measure(new_instance['prediction_budget']), budget_upper_bound))
@@ -178,7 +201,7 @@ def main():
         for idx, instance in enumerate(dataset):
             if (idx + 1) >= 1:
                 logger.info('=' * 30 + f"Step: {idx + 1} / {len(dataset)}" + '=' * 30)
-                pred_flag = evaluator.evaluate_sample(instance)
+                pred_flag = evaluator.evaluate_sample(instance, classification=is_classification)
                 if not pred_flag:
                     continue
                 target_pred = instance['prediction']
@@ -192,7 +215,7 @@ def main():
                 pred_flag = evaluator.evaluate_sample({
                     'ground truth': instance['ground truth'],
                     'prediction': cur_answer
-                })
+                }, classification=is_classification)
                 if pred_flag:
                     instance['question_budget'] = new_question
                     instance['prediction_budget'] = cur_answer

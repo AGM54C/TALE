@@ -4,7 +4,7 @@ import random
 import argparse
 from utils import *
 from torch.utils.data import Subset
-from llm_datasets import MathBenchDataset, GSM8K, GPQA, GSM8KZero
+from llm_datasets import MathBenchDataset, GSM8K, GPQA, GSM8KZero, BanFakeNews
 from llm_models import LLMModel
 import time
 import logging
@@ -29,7 +29,7 @@ def parse_args():
     parser.add_argument("--n", default=1, type=int, help="Number of samples from LLM.")
     parser.add_argument("--start_index", default=0, type=int, help="The start index for the dataset.")
     parser.add_argument("--end_index", default=100, type=int, help="The end index for the dataset.")
-    parser.add_argument("--key_index", default=2, type=int, help="The key index for the dataset.")
+    parser.add_argument("--key_index", default=0, type=int, help="The key index for the dataset.")
     parser.add_argument("--data_name", default='GSM8K',
                         type=str, help="The dataset name used during our evaluation.")
     return parser.parse_args()
@@ -64,6 +64,10 @@ def Adapter(dataset, model, key, args):
     if args.end_index is None:
         args.end_index = len(dataset)
     start_time = time.time()
+
+    # 判断是否为分类任务
+    is_classification = 'BanFakeNews' in args.data_name
+
     for index, data in enumerate(dataset):
         if args.start_index <= index < args.end_index:
             logger.info('=' * 30 + f"Step: {index + 1} / {args.end_index}" + '=' * 30)
@@ -94,8 +98,13 @@ def Adapter(dataset, model, key, args):
                 }
             )
             save_to_jsonl(results, args.output_path)
-            acc_num += evaluator.evaluate_sample(results[-1],
-                                                 cloze=('cloze' in args.data_name) or (args.data_name == 'GSM8K'))
+
+            # 根据任务类型选择评估方法
+            acc_num += evaluator.evaluate_sample(
+                results[-1],
+                cloze=('cloze' in args.data_name) or (args.data_name in ['GSM8K', 'GSM8K-Zero']),
+                classification=is_classification
+            )
             logger.info(f'Accuracy: {acc_num / len(results)}')
             logger.info(f'Time cost: {time.time() - start_time}')
 
@@ -124,7 +133,7 @@ def main():
         'moonshotai/Kimi-K2-Thinking-Turbo': ['sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa',
                                               'sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa'],
         'moonshotai/Kimi-K2-Instruct-0905': ['sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa',
-                                              'sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa']
+                                             'sk-bqcjhmsvgfwcdxaqlspqronplvnzfwcqctyrxubqqbredifa']
     }
     key = keys[args.model][args.key_index]
 
@@ -141,12 +150,33 @@ def main():
     elif args.data_name == 'GSM8K-Zero':
         dataset = GSM8KZero(args, with_reasoning=args.reasoning,
                             name=args.data_name, cache=False)
+    elif args.data_name == 'GPQA':
+        dataset = GPQA(args, with_reasoning=args.reasoning,
+                       name=args.data_name, cache=False)
+    elif args.data_name in ['BanFakeNews', 'BanFakeNews-Train', 'BanFakeNews-Test']:
+        # 确定使用哪个子集
+        if args.data_name == 'BanFakeNews-Train':
+            subset_name = 'train'
+        elif args.data_name == 'BanFakeNews-Test':
+            subset_name = 'test'
+        else:
+            subset_name = 'all'
+
+        dataset = BanFakeNews(args, with_reasoning=args.reasoning,
+                              name=subset_name, cache=False)
     else:
         dataset = None
         ValueError(f"{args.data_name} is not supported!")
 
     # 准备LLM模型
     model = LLMModel(args)
+
+    # 检查数据集是否成功加载
+    if dataset is None:
+        logger.error(f"Failed to load dataset: {args.data_name}")
+        return
+
+    logger.info(f"Dataset loaded: {len(dataset)} samples")
     Adapter(dataset, model, key, args)
 
 

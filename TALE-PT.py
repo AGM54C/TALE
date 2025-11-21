@@ -343,24 +343,58 @@ def evaluate():
 
 def tokenize_data(dataset, tokenizer):
     """
-    Tokenize dataset for training.
-    
-    Args:
-        dataset: HuggingFace Dataset to tokenize
-        tokenizer: Tokenizer to use
-        
-    Returns:
-        Dataset: Tokenized dataset with input_ids and labels
-    """
-    def tokenize_function(examples):
-        input_texts = examples["input_text"]
-        output_texts = examples["target_text"]
-        full_texts = [inp + "\n" + out for inp, out in zip(input_texts, output_texts)]
-        tokenized = tokenizer(full_texts, padding="max_length", truncation=True, max_length=2048)
-        tokenized["labels"] = tokenized["input_ids"].copy()
-        return tokenized
+    Tokenize the dataset for training.
 
-    tokenized_dataset = dataset.map(tokenize_function, batched=True)
+    Args:
+        dataset: HuggingFace Dataset object
+        tokenizer: Tokenizer to use
+
+    Returns:
+        Tokenized dataset
+    """
+
+    def tokenize_function(examples):
+        """
+        Tokenize function for dataset mapping.
+
+        Supports multiple data formats:
+        - {"input_text": ...} - 原始格式
+        - {"question": ..., "answer": ...} - BanFakeNews 格式
+        """
+        # 🔑 关键修复: 检测数据格式并适配
+        if "input_text" in examples:
+            # 原始格式
+            input_texts = examples["input_text"]
+        elif "question" in examples and "answer" in examples:
+            # BanFakeNews 格式: 拼接 question 和 answer
+            input_texts = [
+                q + a for q, a in zip(examples["question"], examples["answer"])
+            ]
+        else:
+            raise KeyError(f"Unknown data format. Available keys: {list(examples.keys())}")
+
+        # Tokenize
+        model_inputs = tokenizer(
+            input_texts,
+            max_length=args.max_new_tokens,
+            truncation=True,
+            padding="max_length",
+            return_tensors=None  # 返回 list 而不是 tensor
+        )
+
+        # 设置 labels（用于计算 loss）
+        model_inputs["labels"] = model_inputs["input_ids"].copy()
+
+        return model_inputs
+
+    logger.info("Tokenizing dataset...")
+    tokenized_dataset = dataset.map(
+        tokenize_function,
+        batched=True,
+        remove_columns=dataset.column_names  # 移除原始列
+    )
+    logger.info(f"Tokenized {len(tokenized_dataset)} samples")
+
     return tokenized_dataset
 
 

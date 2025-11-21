@@ -364,38 +364,68 @@ def tokenize_data(dataset, tokenizer):
     return tokenized_dataset
 
 
-def load_model(model_path, lora_path=None):
+def load_model(model_path, lora_path):
     """
-    Load and prepare model for training or inference.
-    
-    Args:
-        model_path: Path to base model
-        lora_path: Optional path to LoRA weights
-        
-    Returns:
-        tuple: (model, tokenizer) where:
-            model: Loaded and prepared model
-            tokenizer: Configured tokenizer
-    """
-    tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
-    if args.model_name in ['Qwen2.5-14B', 'Qwen2.5-7B-Instruct-1M']:
-        tokenizer.padding_side = "left"
-        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
-    base_model = AutoModelForCausalLM.from_pretrained(model_path, local_files_only=True)
-    base_model.eval()
-    logger.info(f"Load base model from {model_path}")
-    logger.info(f"Tokenizer max length: {tokenizer.model_max_length}")
-    logger.info(f"Model config max length: {base_model.config.max_position_embeddings}")
+    Load the base model and tokenizer.
 
-    if lora_path is None:
-        return base_model, tokenizer
-    lora_model = PeftModel.from_pretrained(base_model, lora_path)
-    logger.info(f"Load LoRA model from {lora_path} Successfully!")
-    merged_model = lora_model.merge_and_unload()
-    assert not isinstance(merged_model, PeftModel), "merge_and_unload failed"
-    merged_model.half()
-    merged_model.eval()
-    return merged_model, tokenizer
+    Args:
+        model_path: Path to the model directory
+        lora_path: Path to LoRA weights (optional)
+
+    Returns:
+        tuple: (model, tokenizer)
+    """
+    logger.info(f"Loading model from: {model_path}")
+
+    # 🔑 关键修复: 使用绝对路径并确保格式正确
+    import os
+    model_path = os.path.abspath(model_path)
+
+    logger.info(f"Absolute path: {model_path}")
+
+    # 检查路径是否存在
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model path does not exist: {model_path}")
+
+    # 🔑 关键修复: 不使用 local_files_only，让它自动检测
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            use_fast=False
+        )
+    except Exception as e:
+        logger.error(f"Failed to load tokenizer: {e}")
+        # 尝试备用方法
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            local_files_only=False  # 允许在线查找配置
+        )
+
+    logger.info("Tokenizer loaded successfully")
+
+    # 加载模型
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            trust_remote_code=True,
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+        raise
+
+    logger.info("Model loaded successfully")
+
+    # 如果有 LoRA 权重，加载它们
+    if lora_path and os.path.exists(lora_path):
+        logger.info(f"Loading LoRA weights from: {lora_path}")
+        model = PeftModel.from_pretrained(model, lora_path)
+        logger.info("LoRA weights loaded successfully")
+
+    return model, tokenizer
 
 
 def train_model_with_lora(model, tokenizer, dataset):

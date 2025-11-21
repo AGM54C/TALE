@@ -250,6 +250,7 @@ def preprocess_function(examples, tokenizer):
         padding="max_length"
     )
 
+
     # 设置 labels（用于计算 loss）
     model_inputs["labels"] = model_inputs["input_ids"].copy()
 
